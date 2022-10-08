@@ -1,16 +1,51 @@
+extern crate lazy_static;
 mod error;
 
 use input_linux::{
     EventKind, EventTime, InputEvent, InputId, KeyEvent, KeyState, SynchronizeEvent,
     SynchronizeKind, UInputHandle,
 };
+use lazy_static::lazy_static;
 use nix::libc::O_NONBLOCK;
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 
 struct State {}
+
+lazy_static! {
+    static ref MIDI_KEY_MAP: HashMap<u8, input_linux::Key> = vec![
+        (36u8, input_linux::Key::A),
+        (38u8, input_linux::Key::B),
+        (40u8, input_linux::Key::C),
+        (41u8, input_linux::Key::D),
+        (43u8, input_linux::Key::E),
+        (45u8, input_linux::Key::F),
+        (47u8, input_linux::Key::G),
+        (48u8, input_linux::Key::H),
+        (50u8, input_linux::Key::I),
+        (52u8, input_linux::Key::J),
+        (53u8, input_linux::Key::K),
+        (55u8, input_linux::Key::L),
+        (57u8, input_linux::Key::M),
+        (59u8, input_linux::Key::N),
+        (60u8, input_linux::Key::O),
+        (62u8, input_linux::Key::P),
+        (64u8, input_linux::Key::Q),
+        (65u8, input_linux::Key::R),
+        (67u8, input_linux::Key::S),
+        (69u8, input_linux::Key::T),
+        (61u8, input_linux::Key::U),
+        (72u8, input_linux::Key::V),
+        (74u8, input_linux::Key::X),
+        (76u8, input_linux::Key::Y),
+        (77u8, input_linux::Key::Z)
+    ]
+    .into_iter()
+    .collect();
+}
 
 fn init_midi() -> (
     jack::Client,
@@ -42,7 +77,9 @@ fn make_uhandle() -> UInputHandle<std::fs::File> {
     let uhandle = UInputHandle::new(uinput_file);
 
     uhandle.set_evbit(EventKind::Key).unwrap();
-    uhandle.set_keybit(input_linux::Key::Q).unwrap();
+    for (_, key) in MIDI_KEY_MAP.iter() {
+        uhandle.set_keybit(*key).unwrap();
+    }
 
     let input_id = InputId {
         bustype: input_linux::sys::BUS_USB,
@@ -57,27 +94,24 @@ fn make_uhandle() -> UInputHandle<std::fs::File> {
     uhandle
 }
 
+fn process_key(key: &u8, pressed: bool, uhandle: &UInputHandle<std::fs::File>) {
+    const ZERO: EventTime = EventTime::new(0, 0);
+    if let Some(uinput_key) = MIDI_KEY_MAP.get(key) {
+        let events = [
+            *InputEvent::from(KeyEvent::new(ZERO, *uinput_key, KeyState::pressed(pressed)))
+                .as_raw(),
+            *InputEvent::from(SynchronizeEvent::new(ZERO, SynchronizeKind::Report, 0)).as_raw(),
+        ];
+        uhandle.write(&events).expect("Failed to write events");
+    } else {
+        println!("Unhandled input: {key}");
+    }
+}
+
 fn main() {
     let (client, midi_receiver, _state) = init_midi();
 
     let uhandle = make_uhandle();
-
-    const ZERO: EventTime = EventTime::new(0, 0);
-    let events = [
-        *InputEvent::from(KeyEvent::new(
-            ZERO,
-            input_linux::Key::Q,
-            KeyState::pressed(true),
-        ))
-        .as_raw(),
-        *InputEvent::from(KeyEvent::new(
-            ZERO,
-            input_linux::Key::Q,
-            KeyState::pressed(false),
-        ))
-        .as_raw(),
-        *InputEvent::from(SynchronizeEvent::new(ZERO, SynchronizeKind::Report, 0)).as_raw(),
-    ];
 
     let jack_callback = {
         //let state = Arc::clone(&state);
@@ -88,10 +122,9 @@ fn main() {
             for event in midi.iter(ps) {
                 match event.bytes {
                     [248] => (),
-                    _ => {
-                        println!("{event:?}");
-                        //uhandle.write(&events).expect("Failed to write events");
-                    }
+                    [144, key, _] => process_key(key, true, &uhandle),
+                    [128, key, _] => process_key(key, false, &uhandle),
+                    _ => (),
                 }
             }
             jack::Control::Continue

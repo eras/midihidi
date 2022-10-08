@@ -12,5 +12,6 @@ clap = { version = "4.0.10", features = ["derive", "wrap_help", "unicode"] }
 ctrlc = "3.2.3"
 input-linux = { version = "0.5.0", features = ["bytes"] }
 jack = "0.8.0"                               # Real time audio and midi with JACK.
+lazy_static = "1.4.0"
 nix = "0.25.0"
 thiserror = "1.0.22"
