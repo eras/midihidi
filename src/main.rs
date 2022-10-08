@@ -48,8 +48,6 @@ enum Mapping {
     Fixed(input_linux::Key),
 }
 
-struct State {}
-
 type KeyMapping = [input_linux::Key; 26];
 
 const ALPHABET_MAPPING: KeyMapping = [
@@ -189,11 +187,7 @@ lazy_static! {
     .collect();
 }
 
-fn init_midi() -> (
-    jack::Client,
-    Arc<Mutex<jack::Port<jack::MidiIn>>>,
-    Arc<Mutex<State>>,
-) {
+fn init_midi() -> (jack::Client, Arc<Mutex<jack::Port<jack::MidiIn>>>) {
     let (client, _status) =
         jack::Client::new("midihid", jack::ClientOptions::NO_START_SERVER).unwrap();
 
@@ -201,12 +195,7 @@ fn init_midi() -> (
         .register_port("keyboard", jack::MidiIn::default())
         .unwrap();
 
-    let state = State {};
-    (
-        client,
-        Arc::new(Mutex::new(midi_receiver)),
-        Arc::new(Mutex::new(state)),
-    )
+    (client, Arc::new(Mutex::new(midi_receiver)))
 }
 
 fn make_uhandle(keymap: &KeyMap) -> UInputHandle<std::fs::File> {
@@ -224,6 +213,7 @@ fn make_uhandle(keymap: &KeyMap) -> UInputHandle<std::fs::File> {
             uhandle.set_keybit(key).unwrap();
         }
     }
+    uhandle.set_keybit(input_linux::Key::LeftShift).unwrap();
 
     let input_id = InputId {
         bustype: input_linux::sys::BUS_USB,
@@ -238,23 +228,24 @@ fn make_uhandle(keymap: &KeyMap) -> UInputHandle<std::fs::File> {
     uhandle
 }
 
-fn process_key(
-    key: u8,
-    pressed: bool,
-    velocity: u8,
-    uhandle: &UInputHandle<std::fs::File>,
-    map: &KeyMap,
-) {
+struct State {
+    uhandle: UInputHandle<std::fs::File>,
+    keymap: KeyMap,
+    was_shift: bool,
+}
+
+fn process_key(state: &mut State, key: u8, pressed: bool, velocity: u8) {
     let mut time: EventTime = EventTime::new(0, 0);
-    if let Some(uinput_key) = map.map_midi_to_key(key) {
-        let insert_shift = pressed && velocity > 100;
+    if let Some(uinput_key) = state.keymap.map_midi_to_key(key) {
+        let shift = pressed && velocity > 100;
         let mut events = Vec::with_capacity(6);
-        if insert_shift {
+        if shift != state.was_shift {
+            state.was_shift = shift;
             events.push(
                 *InputEvent::from(KeyEvent::new(
                     time,
                     input_linux::Key::LeftShift,
-                    KeyState::pressed(true),
+                    KeyState::pressed(shift),
                 ))
                 .as_raw(),
             );
@@ -262,7 +253,10 @@ fn process_key(
             events.push(
                 *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
             );
-            uhandle.write(&events).expect("Failed to write events");
+            state
+                .uhandle
+                .write(&events)
+                .expect("Failed to write events");
             events.clear();
             time.tv_usec += 10000;
         }
@@ -274,10 +268,14 @@ fn process_key(
             *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
         );
         time.tv_usec += 10000;
-        uhandle.write(&events).expect("Failed to write events");
+        state
+            .uhandle
+            .write(&events)
+            .expect("Failed to write events");
         events.clear();
         time.tv_usec += 10000;
-        if insert_shift {
+        if shift && !pressed {
+            state.was_shift = false;
             events.push(
                 *InputEvent::from(KeyEvent::new(
                     time,
@@ -290,10 +288,12 @@ fn process_key(
             events.push(
                 *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
             );
-            uhandle.write(&events).expect("Failed to write events");
+            state
+                .uhandle
+                .write(&events)
+                .expect("Failed to write events");
         }
-        time.tv_usec += 10000;
-        let insert_shift_message = if insert_shift { " with shift" } else { "" };
+        let insert_shift_message = if shift { " with shift" } else { "" };
         println!("{key}->{uinput_key:?}{insert_shift_message}");
     } else {
         println!("Unhandled input: {key}");
@@ -301,23 +301,31 @@ fn process_key(
 }
 
 fn work(args: Args) {
-    let (client, midi_receiver, _state) = init_midi();
+    let (client, midi_receiver) = init_midi();
 
     let keymap = args.keymap.get_keymap();
 
     let uhandle = make_uhandle(&keymap);
 
+    let state = Arc::new(Mutex::new(State {
+        keymap: keymap,
+        uhandle,
+        was_shift: false,
+    }));
+
     let jack_callback = {
         //let state = Arc::clone(&state);
         let midi_receiver = Arc::clone(&midi_receiver);
         move |_: &jack::Client, ps: &jack::ProcessScope| -> jack::Control {
+            let state = state.clone();
+            let mut state = state.lock().expect("state cannot be locked");
             let midi_receiver = Arc::clone(&midi_receiver);
             let midi = midi_receiver.lock().expect("Cannot lock midi");
             for event in midi.iter(ps) {
                 match event.bytes {
                     [248] => (),
-                    [144, key, velocity] => process_key(*key, true, *velocity, &uhandle, &keymap),
-                    [128, key, velocity] => process_key(*key, false, *velocity, &uhandle, &keymap),
+                    [0x90, key, velocity] => process_key(&mut state, *key, true, *velocity),
+                    [0x80, key, velocity] => process_key(&mut state, *key, false, *velocity),
                     _ => (),
                 }
             }
