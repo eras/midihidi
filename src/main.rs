@@ -258,20 +258,25 @@ fn process_key(
                 ))
                 .as_raw(),
             );
-            time.tv_usec += 1000;
+            time.tv_usec += 10000;
+            events.push(
+                *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
+            );
+            uhandle.write(&events).expect("Failed to write events");
+            events.clear();
+            time.tv_usec += 10000;
         }
-        events.push(
-            *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
-        );
-        time.tv_usec += 1000;
         events.push(
             *InputEvent::from(KeyEvent::new(time, uinput_key, KeyState::pressed(pressed))).as_raw(),
         );
-        time.tv_usec += 1000;
+        time.tv_usec += 10000;
         events.push(
             *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
         );
-        time.tv_usec += 1000;
+        time.tv_usec += 10000;
+        uhandle.write(&events).expect("Failed to write events");
+        events.clear();
+        time.tv_usec += 10000;
         if insert_shift {
             events.push(
                 *InputEvent::from(KeyEvent::new(
@@ -281,13 +286,13 @@ fn process_key(
                 ))
                 .as_raw(),
             );
-            time.tv_usec += 1000;
+            time.tv_usec += 10000;
+            events.push(
+                *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
+            );
+            uhandle.write(&events).expect("Failed to write events");
         }
-        events.push(
-            *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
-        );
-        time.tv_usec += 1000;
-        uhandle.write(&events).expect("Failed to write events");
+        time.tv_usec += 10000;
         let insert_shift_message = if insert_shift { " with shift" } else { "" };
         println!("{key}->{uinput_key:?}{insert_shift_message}");
     } else {
