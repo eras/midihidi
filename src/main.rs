@@ -7,7 +7,7 @@ use input_linux::{
 };
 use lazy_static::lazy_static;
 use nix::libc::O_NONBLOCK;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::mpsc::sync_channel;
@@ -122,16 +122,52 @@ fn make_uhandle() -> UInputHandle<std::fs::File> {
     uhandle
 }
 
-fn process_key(key: &u8, pressed: bool, uhandle: &UInputHandle<std::fs::File>) {
-    const ZERO: EventTime = EventTime::new(0, 0);
-    if let Some(uinput_key) = MIDI_KEY_MAP.get(key) {
-        let events = [
-            *InputEvent::from(KeyEvent::new(ZERO, *uinput_key, KeyState::pressed(pressed)))
+fn process_key(key: u8, pressed: bool, velocity: u8, uhandle: &UInputHandle<std::fs::File>) {
+    let mut time: EventTime = EventTime::new(0, 0);
+    if let Some(uinput_key) = MIDI_KEY_MAP.get(&key) {
+        let insert_shift = pressed && velocity > 100;
+        let mut events = Vec::with_capacity(6);
+        if insert_shift {
+            events.push(
+                *InputEvent::from(KeyEvent::new(
+                    time,
+                    input_linux::Key::LeftShift,
+                    KeyState::pressed(true),
+                ))
                 .as_raw(),
-            *InputEvent::from(SynchronizeEvent::new(ZERO, SynchronizeKind::Report, 0)).as_raw(),
-        ];
-        println!("{key}->{uinput_key:?}");
+            );
+            time.tv_usec += 1000;
+        }
+        events.push(
+            *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
+        );
+        time.tv_usec += 1000;
+        events.push(
+            *InputEvent::from(KeyEvent::new(time, *uinput_key, KeyState::pressed(pressed)))
+                .as_raw(),
+        );
+        time.tv_usec += 1000;
+        events.push(
+            *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
+        );
+        time.tv_usec += 1000;
+        if insert_shift {
+            events.push(
+                *InputEvent::from(KeyEvent::new(
+                    time,
+                    input_linux::Key::LeftShift,
+                    KeyState::pressed(false),
+                ))
+                .as_raw(),
+            );
+            time.tv_usec += 1000;
+        }
+        events.push(
+            *InputEvent::from(SynchronizeEvent::new(time, SynchronizeKind::Report, 0)).as_raw(),
+        );
+        time.tv_usec += 1000;
         uhandle.write(&events).expect("Failed to write events");
+        println!("{key}->{uinput_key:?}");
     } else {
         println!("Unhandled input: {key}");
     }
@@ -151,8 +187,8 @@ fn main() {
             for event in midi.iter(ps) {
                 match event.bytes {
                     [248] => (),
-                    [144, key, _] => process_key(key, true, &uhandle),
-                    [128, key, _] => process_key(key, false, &uhandle),
+                    [144, key, velocity] => process_key(*key, true, *velocity, &uhandle),
+                    [128, key, velocity] => process_key(*key, false, *velocity, &uhandle),
                     _ => (),
                 }
             }
