@@ -1,5 +1,5 @@
 [package]
-name = "midihid"
+name = "midihidi"
 version = "0.1.0"
 edition = "2021"
 authors = ["Erkki Seppälä <erkki.seppala@vincit.fi>"]
