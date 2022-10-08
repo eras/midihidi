@@ -18,30 +18,58 @@ struct State {}
 lazy_static! {
     static ref MIDI_KEY_MAP: HashMap<u8, input_linux::Key> = vec![
         (36u8, input_linux::Key::A),
+        (37u8, input_linux::Key::LeftCtrl),
         (38u8, input_linux::Key::B),
+        (39u8, input_linux::Key::LeftAlt),
         (40u8, input_linux::Key::C),
         (41u8, input_linux::Key::D),
+        (42u8, input_linux::Key::CapsLock),
         (43u8, input_linux::Key::E),
+        (44u8, input_linux::Key::Esc),
         (45u8, input_linux::Key::F),
         (47u8, input_linux::Key::G),
+    //
         (48u8, input_linux::Key::H),
+        (49u8, input_linux::Key::Num1),
         (50u8, input_linux::Key::I),
+        (51u8, input_linux::Key::Num2),
         (52u8, input_linux::Key::J),
         (53u8, input_linux::Key::K),
+        (54u8, input_linux::Key::Num3),
         (55u8, input_linux::Key::L),
+        (56u8, input_linux::Key::Num4),
         (57u8, input_linux::Key::M),
+        (58u8, input_linux::Key::Num5),
         (59u8, input_linux::Key::N),
+    //
         (60u8, input_linux::Key::O),
+        (61u8, input_linux::Key::Num6),
         (62u8, input_linux::Key::P),
+        (63u8, input_linux::Key::Num7),
         (64u8, input_linux::Key::Q),
         (65u8, input_linux::Key::R),
+        (66u8, input_linux::Key::Num8),
         (67u8, input_linux::Key::S),
+        (68u8, input_linux::Key::Num9),
         (69u8, input_linux::Key::T),
-        (61u8, input_linux::Key::U),
+        (70u8, input_linux::Key::Num0),
+        (71u8, input_linux::Key::U),
+    //
         (72u8, input_linux::Key::V),
-        (74u8, input_linux::Key::X),
-        (76u8, input_linux::Key::Y),
-        (77u8, input_linux::Key::Z)
+        (73u8, input_linux::Key::Left),
+        (74u8, input_linux::Key::W),
+        (75u8, input_linux::Key::Down),
+        (76u8, input_linux::Key::X),
+        (77u8, input_linux::Key::Y),
+        (78u8, input_linux::Key::Up),
+        (79u8, input_linux::Key::Z),
+        (80u8, input_linux::Key::Right),
+    //
+        (81u8, input_linux::Key::Backspace),
+        (82u8, input_linux::Key::Break),
+        (83u8, input_linux::Key::Space),
+        (84u8, input_linux::Key::Enter),
+
     ]
     .into_iter()
     .collect();
@@ -102,6 +130,7 @@ fn process_key(key: &u8, pressed: bool, uhandle: &UInputHandle<std::fs::File>) {
                 .as_raw(),
             *InputEvent::from(SynchronizeEvent::new(ZERO, SynchronizeKind::Report, 0)).as_raw(),
         ];
+        println!("{key}->{uinput_key:?}");
         uhandle.write(&events).expect("Failed to write events");
     } else {
         println!("Unhandled input: {key}");
