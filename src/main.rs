@@ -7,72 +7,145 @@ use input_linux::{
 };
 use lazy_static::lazy_static;
 use nix::libc::O_NONBLOCK;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 
+#[derive(Debug, PartialEq, PartialOrd)]
+enum Mapping {
+    Alphabet(u8),
+    Fixed(input_linux::Key),
+}
+
 struct State {}
 
-lazy_static! {
-    static ref MIDI_KEY_MAP: HashMap<u8, input_linux::Key> = vec![
-        (36u8, input_linux::Key::A),
-        (37u8, input_linux::Key::LeftCtrl),
-        (38u8, input_linux::Key::B),
-        (39u8, input_linux::Key::LeftAlt),
-        (40u8, input_linux::Key::C),
-        (41u8, input_linux::Key::D),
-        (42u8, input_linux::Key::CapsLock),
-        (43u8, input_linux::Key::E),
-        (44u8, input_linux::Key::Esc),
-        (45u8, input_linux::Key::F),
-        (47u8, input_linux::Key::G),
-    //
-        (48u8, input_linux::Key::H),
-        (49u8, input_linux::Key::Num1),
-        (50u8, input_linux::Key::I),
-        (51u8, input_linux::Key::Num2),
-        (52u8, input_linux::Key::J),
-        (53u8, input_linux::Key::K),
-        (54u8, input_linux::Key::Num3),
-        (55u8, input_linux::Key::L),
-        (56u8, input_linux::Key::Num4),
-        (57u8, input_linux::Key::M),
-        (58u8, input_linux::Key::Num5),
-        (59u8, input_linux::Key::N),
-    //
-        (60u8, input_linux::Key::O),
-        (61u8, input_linux::Key::Num6),
-        (62u8, input_linux::Key::P),
-        (63u8, input_linux::Key::Num7),
-        (64u8, input_linux::Key::Q),
-        (65u8, input_linux::Key::R),
-        (66u8, input_linux::Key::Num8),
-        (67u8, input_linux::Key::S),
-        (68u8, input_linux::Key::Num9),
-        (69u8, input_linux::Key::T),
-        (70u8, input_linux::Key::Num0),
-        (71u8, input_linux::Key::U),
-    //
-        (72u8, input_linux::Key::V),
-        (73u8, input_linux::Key::Left),
-        (74u8, input_linux::Key::W),
-        (75u8, input_linux::Key::Down),
-        (76u8, input_linux::Key::X),
-        (77u8, input_linux::Key::Y),
-        (78u8, input_linux::Key::Up),
-        (79u8, input_linux::Key::Z),
-        (80u8, input_linux::Key::Right),
-    //
-        (81u8, input_linux::Key::Backspace),
-        (82u8, input_linux::Key::Break),
-        (83u8, input_linux::Key::Space),
-        (84u8, input_linux::Key::Enter),
+const ALPHABET_MAPPING: [input_linux::Key; 26] = [
+    input_linux::Key::A,
+    input_linux::Key::B,
+    input_linux::Key::C,
+    input_linux::Key::D,
+    input_linux::Key::E,
+    input_linux::Key::F,
+    input_linux::Key::G,
+    input_linux::Key::H,
+    input_linux::Key::I,
+    input_linux::Key::J,
+    input_linux::Key::K,
+    input_linux::Key::L,
+    input_linux::Key::M,
+    input_linux::Key::N,
+    input_linux::Key::O,
+    input_linux::Key::P,
+    input_linux::Key::Q,
+    input_linux::Key::R,
+    input_linux::Key::S,
+    input_linux::Key::T,
+    input_linux::Key::U,
+    input_linux::Key::V,
+    input_linux::Key::W,
+    input_linux::Key::X,
+    input_linux::Key::Y,
+    input_linux::Key::Z,
+];
 
+const QWERTY_MAPPING: [input_linux::Key; 26] = [
+    input_linux::Key::Q,
+    input_linux::Key::W,
+    input_linux::Key::E,
+    input_linux::Key::R,
+    input_linux::Key::T,
+    input_linux::Key::Y,
+    input_linux::Key::U,
+    input_linux::Key::I,
+    input_linux::Key::O,
+    input_linux::Key::P,
+    input_linux::Key::A,
+    input_linux::Key::S,
+    input_linux::Key::D,
+    input_linux::Key::F,
+    input_linux::Key::G,
+    input_linux::Key::H,
+    input_linux::Key::J,
+    input_linux::Key::K,
+    input_linux::Key::L,
+    input_linux::Key::Z,
+    input_linux::Key::X,
+    input_linux::Key::C,
+    input_linux::Key::V,
+    input_linux::Key::B,
+    input_linux::Key::N,
+    input_linux::Key::M,
+];
+
+type MidiNote = u8;
+
+lazy_static! {
+    static ref MIDI_KEY_MAP: HashMap<MidiNote, Mapping> = vec![
+        (36u8, Mapping::Alphabet(0)),
+        (37u8, Mapping::Fixed(input_linux::Key::LeftCtrl)),
+        (38u8, Mapping::Alphabet(1)),
+        (39u8, Mapping::Fixed(input_linux::Key::LeftAlt)),
+        (40u8, Mapping::Alphabet(2)),
+        (41u8, Mapping::Alphabet(3)),
+        (42u8, Mapping::Fixed(input_linux::Key::CapsLock)),
+        (43u8, Mapping::Alphabet(4)),
+        (44u8, Mapping::Fixed(input_linux::Key::Esc)),
+        (45u8, Mapping::Alphabet(5)),
+        (47u8, Mapping::Alphabet(6)),
+    //
+        (48u8, Mapping::Alphabet(7)),
+        (49u8, Mapping::Fixed(input_linux::Key::Num1)),
+        (50u8, Mapping::Alphabet(8)),
+        (51u8, Mapping::Fixed(input_linux::Key::Num2)),
+        (52u8, Mapping::Alphabet(9)),
+        (53u8, Mapping::Alphabet(10)),
+        (54u8, Mapping::Fixed(input_linux::Key::Num3)),
+        (55u8, Mapping::Alphabet(11)),
+        (56u8, Mapping::Fixed(input_linux::Key::Num4)),
+        (57u8, Mapping::Alphabet(12)),
+        (58u8, Mapping::Fixed(input_linux::Key::Num5)),
+        (59u8, Mapping::Alphabet(13)),
+    //
+        (60u8, Mapping::Alphabet(14)),
+        (61u8, Mapping::Fixed(input_linux::Key::Num6)),
+        (62u8, Mapping::Alphabet(15)),
+        (63u8, Mapping::Fixed(input_linux::Key::Num7)),
+        (64u8, Mapping::Alphabet(16)),
+        (65u8, Mapping::Alphabet(17)),
+        (66u8, Mapping::Fixed(input_linux::Key::Num8)),
+        (67u8, Mapping::Alphabet(18)),
+        (68u8, Mapping::Fixed(input_linux::Key::Num9)),
+        (69u8, Mapping::Alphabet(19)),
+        (70u8, Mapping::Fixed(input_linux::Key::Num0)),
+        (71u8, Mapping::Alphabet(20)),
+    //
+        (72u8, Mapping::Alphabet(21)),
+        (73u8, Mapping::Fixed(input_linux::Key::Left)),
+        (74u8, Mapping::Alphabet(22)),
+        (75u8, Mapping::Fixed(input_linux::Key::Down)),
+        (76u8, Mapping::Alphabet(23)),
+        (77u8, Mapping::Alphabet(24)),
+        (78u8, Mapping::Fixed(input_linux::Key::Up)),
+        (79u8, Mapping::Alphabet(25)),
+        (80u8, Mapping::Fixed(input_linux::Key::Right)),
+    //
+        (81u8, Mapping::Fixed(input_linux::Key::Backspace)),
+        (82u8, Mapping::Fixed(input_linux::Key::Break)),
+        (83u8, Mapping::Fixed(input_linux::Key::Space)),
+        (84u8, Mapping::Fixed(input_linux::Key::Enter)),
     ]
     .into_iter()
     .collect();
+}
+
+fn map_midi_to_key(note: MidiNote) -> Option<input_linux::Key> {
+    match MIDI_KEY_MAP.get(&note) {
+        Some(Mapping::Fixed(key)) => Some(*key),
+        Some(Mapping::Alphabet(index)) => Some(QWERTY_MAPPING[*index as usize]),
+        None => None,
+    }
 }
 
 fn init_midi() -> (
@@ -105,8 +178,10 @@ fn make_uhandle() -> UInputHandle<std::fs::File> {
     let uhandle = UInputHandle::new(uinput_file);
 
     uhandle.set_evbit(EventKind::Key).unwrap();
-    for (_, key) in MIDI_KEY_MAP.iter() {
-        uhandle.set_keybit(*key).unwrap();
+    for (note, _) in MIDI_KEY_MAP.iter() {
+        if let Some(key) = map_midi_to_key(*note) {
+            uhandle.set_keybit(key).unwrap();
+        }
     }
 
     let input_id = InputId {
@@ -124,7 +199,7 @@ fn make_uhandle() -> UInputHandle<std::fs::File> {
 
 fn process_key(key: u8, pressed: bool, velocity: u8, uhandle: &UInputHandle<std::fs::File>) {
     let mut time: EventTime = EventTime::new(0, 0);
-    if let Some(uinput_key) = MIDI_KEY_MAP.get(&key) {
+    if let Some(uinput_key) = map_midi_to_key(key) {
         let insert_shift = pressed && velocity > 100;
         let mut events = Vec::with_capacity(6);
         if insert_shift {
@@ -143,8 +218,7 @@ fn process_key(key: u8, pressed: bool, velocity: u8, uhandle: &UInputHandle<std:
         );
         time.tv_usec += 1000;
         events.push(
-            *InputEvent::from(KeyEvent::new(time, *uinput_key, KeyState::pressed(pressed)))
-                .as_raw(),
+            *InputEvent::from(KeyEvent::new(time, uinput_key, KeyState::pressed(pressed))).as_raw(),
         );
         time.tv_usec += 1000;
         events.push(
@@ -167,7 +241,8 @@ fn process_key(key: u8, pressed: bool, velocity: u8, uhandle: &UInputHandle<std:
         );
         time.tv_usec += 1000;
         uhandle.write(&events).expect("Failed to write events");
-        println!("{key}->{uinput_key:?}");
+        let insert_shift_message = if insert_shift { " with shift" } else { "" };
+        println!("{key}->{uinput_key:?}{insert_shift_message}");
     } else {
         println!("Unhandled input: {key}");
     }
