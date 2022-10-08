@@ -13,6 +13,35 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 
+use clap::Parser;
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum KeyMappingOptions {
+    Alphabet,
+    Qwerty,
+}
+
+impl KeyMappingOptions {
+    fn get_keymap(&self) -> KeyMap {
+        match self {
+            Self::Alphabet => KeyMap::new(ALPHABET_MAPPING),
+            Self::Qwerty => KeyMap::new(QWERTY_MAPPING),
+        }
+    }
+}
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Name of the person to greet
+    #[arg(short, long)]
+    keymap: KeyMappingOptions,
+
+    /// Connect to this input device
+    #[arg(short, long)]
+    input: Option<String>,
+}
+
 #[derive(Debug, PartialEq, PartialOrd)]
 enum Mapping {
     Alphabet(u8),
@@ -21,7 +50,9 @@ enum Mapping {
 
 struct State {}
 
-const ALPHABET_MAPPING: [input_linux::Key; 26] = [
+type KeyMapping = [input_linux::Key; 26];
+
+const ALPHABET_MAPPING: KeyMapping = [
     input_linux::Key::A,
     input_linux::Key::B,
     input_linux::Key::C,
@@ -50,7 +81,7 @@ const ALPHABET_MAPPING: [input_linux::Key; 26] = [
     input_linux::Key::Z,
 ];
 
-const QWERTY_MAPPING: [input_linux::Key; 26] = [
+const QWERTY_MAPPING: KeyMapping = [
     input_linux::Key::Q,
     input_linux::Key::W,
     input_linux::Key::E,
@@ -78,6 +109,24 @@ const QWERTY_MAPPING: [input_linux::Key; 26] = [
     input_linux::Key::N,
     input_linux::Key::M,
 ];
+
+struct KeyMap {
+    mapping: KeyMapping,
+}
+
+impl KeyMap {
+    fn new(mapping: KeyMapping) -> Self {
+        KeyMap { mapping }
+    }
+
+    fn map_midi_to_key(&self, note: MidiNote) -> Option<input_linux::Key> {
+        match MIDI_KEY_MAP.get(&note) {
+            Some(Mapping::Fixed(key)) => Some(*key),
+            Some(Mapping::Alphabet(index)) => Some(self.mapping[*index as usize]),
+            None => None,
+        }
+    }
+}
 
 type MidiNote = u8;
 
@@ -140,14 +189,6 @@ lazy_static! {
     .collect();
 }
 
-fn map_midi_to_key(note: MidiNote) -> Option<input_linux::Key> {
-    match MIDI_KEY_MAP.get(&note) {
-        Some(Mapping::Fixed(key)) => Some(*key),
-        Some(Mapping::Alphabet(index)) => Some(QWERTY_MAPPING[*index as usize]),
-        None => None,
-    }
-}
-
 fn init_midi() -> (
     jack::Client,
     Arc<Mutex<jack::Port<jack::MidiIn>>>,
@@ -168,7 +209,7 @@ fn init_midi() -> (
     )
 }
 
-fn make_uhandle() -> UInputHandle<std::fs::File> {
+fn make_uhandle(keymap: &KeyMap) -> UInputHandle<std::fs::File> {
     let uinput_file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -179,7 +220,7 @@ fn make_uhandle() -> UInputHandle<std::fs::File> {
 
     uhandle.set_evbit(EventKind::Key).unwrap();
     for (note, _) in MIDI_KEY_MAP.iter() {
-        if let Some(key) = map_midi_to_key(*note) {
+        if let Some(key) = keymap.map_midi_to_key(*note) {
             uhandle.set_keybit(key).unwrap();
         }
     }
@@ -197,9 +238,15 @@ fn make_uhandle() -> UInputHandle<std::fs::File> {
     uhandle
 }
 
-fn process_key(key: u8, pressed: bool, velocity: u8, uhandle: &UInputHandle<std::fs::File>) {
+fn process_key(
+    key: u8,
+    pressed: bool,
+    velocity: u8,
+    uhandle: &UInputHandle<std::fs::File>,
+    map: &KeyMap,
+) {
     let mut time: EventTime = EventTime::new(0, 0);
-    if let Some(uinput_key) = map_midi_to_key(key) {
+    if let Some(uinput_key) = map.map_midi_to_key(key) {
         let insert_shift = pressed && velocity > 100;
         let mut events = Vec::with_capacity(6);
         if insert_shift {
@@ -248,10 +295,12 @@ fn process_key(key: u8, pressed: bool, velocity: u8, uhandle: &UInputHandle<std:
     }
 }
 
-fn main() {
+fn work(args: Args) {
     let (client, midi_receiver, _state) = init_midi();
 
-    let uhandle = make_uhandle();
+    let keymap = args.keymap.get_keymap();
+
+    let uhandle = make_uhandle(&keymap);
 
     let jack_callback = {
         //let state = Arc::clone(&state);
@@ -262,8 +311,8 @@ fn main() {
             for event in midi.iter(ps) {
                 match event.bytes {
                     [248] => (),
-                    [144, key, velocity] => process_key(*key, true, *velocity, &uhandle),
-                    [128, key, velocity] => process_key(*key, false, *velocity, &uhandle),
+                    [144, key, velocity] => process_key(*key, true, *velocity, &uhandle, &keymap),
+                    [128, key, velocity] => process_key(*key, false, *velocity, &uhandle, &keymap),
                     _ => (),
                 }
             }
@@ -280,7 +329,10 @@ fn main() {
                 port.aliases()
                     .expect("aiee")
                     .iter()
-                    .filter(|&x| x.as_str() == "Novation SL MkIII:Novation SL MkIII MIDI 1")
+                    .filter(|&x| match &args.input {
+                        Some(input) => input == x,
+                        None => false,
+                    })
                     .next(),
                 Some(_)
             );
@@ -318,4 +370,8 @@ fn main() {
             .deactivate()
             .expect("Failed to deactivate Jack session");
     }
+}
+
+fn main() {
+    work(Args::parse());
 }
